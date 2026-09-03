@@ -255,15 +255,23 @@ async function rerollGiveaway(msgId, channel) {
   return { success: true };
 }
 
-// ==================== INVITE TRACKER EVENTS ====================
+// ==================== WELCOME, BYE & INVITE TRACKER EVENTS ====================
 client.on('guildMemberAdd', async (member) => {
-  const cached = guildInvites.get(member.guild.id);
+  let inviterTag = 'Unknown / Direct Join';
+  let inviterCount = 0;
+
+  // 1. Verificare invitații
   try {
+    const cached = guildInvites.get(member.guild.id);
     const newInvites = await member.guild.invites.fetch();
     const usedInvite = newInvites.find(inv => cached && cached.get(inv.code) < inv.uses);
 
+    guildInvites.set(member.guild.id, new Map(newInvites.map(inv => [inv.code, inv.uses])));
+
     if (usedInvite && usedInvite.inviter) {
       const inviterId = usedInvite.inviter.id;
+      inviterTag = usedInvite.inviter.tag;
+
       if (!db.invites[inviterId]) db.invites[inviterId] = { total: 0, active: 0, left: 0, fake: 0, users: [] };
       if (!db.invites[inviterId].users) db.invites[inviterId].users = [];
 
@@ -282,26 +290,41 @@ client.on('guildMemberAdd', async (member) => {
       });
       saveDB();
 
-      if (db.welcomeChannel) {
-        const channel = member.guild.channels.cache.get(db.welcomeChannel);
-        if (channel) {
-          const embed = new EmbedBuilder()
-            .setColor(COLOR_CYAN)
-            .setTitle(`👋 Welcome to TITAN Market™!`)
-            .setDescription(`• User: ${member}\n• Invited by: **${usedInvite.inviter.tag}**\n• Total Active Invites: **${db.invites[inviterId].active}**`)
-            .setThumbnail(member.user.displayAvatarURL())
-            .setTimestamp();
-          channel.send({ embeds: [embed] });
-        }
-      }
+      inviterCount = db.invites[inviterId].active;
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error('Error fetching invites:', e.message);
+  }
+
+  // 2. Trimitere mesaj Welcome (GARANTAT)
+  if (db.welcomeChannel) {
+    try {
+      const channel = await member.guild.channels.fetch(db.welcomeChannel).catch(() => null);
+      if (channel) {
+        const embed = new EmbedBuilder()
+          .setColor(COLOR_CYAN)
+          .setTitle(`👋 Welcome to TITAN Market™!`)
+          .setDescription(`• User: ${member}\n• Invited by: **${inviterTag}**\n• Total Active Invites: **${inviterCount}**`)
+          .setThumbnail(member.user.displayAvatarURL())
+          .setTimestamp();
+        await channel.send({ embeds: [embed] });
+      }
+    } catch (err) {
+      console.error('Error sending welcome message:', err.message);
+    }
+  }
 });
 
 client.on('guildMemberRemove', async (member) => {
   if (db.byeChannel) {
-    const channel = member.guild.channels.cache.get(db.byeChannel);
-    if (channel) channel.send(`👋 **${member.user.tag}** left TITAN Market.`);
+    try {
+      const channel = await member.guild.channels.fetch(db.byeChannel).catch(() => null);
+      if (channel) {
+        await channel.send(`👋 **${member.user.tag}** left TITAN Market.`);
+      }
+    } catch (err) {
+      console.error('Error sending bye message:', err.message);
+    }
   }
 });
 
@@ -663,7 +686,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // 1. Send Transcript to Logs Channel
       const targetLogsId = db.logsChannel || DEFAULT_LOGS_CHANNEL;
-      const logChannel = interaction.guild.channels.cache.get(targetLogsId);
+      const logChannel = await interaction.guild.channels.fetch(targetLogsId).catch(() => null);
       if (logChannel) {
         const attachmentLog = new AttachmentBuilder(buffer, { name: `${interaction.channel.name}-transcript.txt` });
         logChannel.send({ content: `📁 **Transcript for ${interaction.channel.name}**`, files: [attachmentLog] });
